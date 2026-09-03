@@ -2,34 +2,34 @@
 # Miguel – Git Shortcuts & Snapshot Utility
 # ------------------------------------------
 
-# Caminho para Notepad++
+# Path to Notepad++
 $global:NPP_PATH = "C:\Program Files\Notepad++\notepad++.exe"
 
-# Suporta múltiplos ficheiros e argumentos (ex: npp arq1.txt arq2.txt)
+# Supports multiple files and arguments (e.g. npp file1.txt file2.txt)
 function npp {
     if (Test-Path $NPP_PATH) {
         & $NPP_PATH $args
     } else {
-        Write-Host "Notepad++ não foi encontrado em: $NPP_PATH" -ForegroundColor Red
+        Write-Host "Notepad++ not found at: $NPP_PATH" -ForegroundColor Red
     }
 }
 
 # ------------------------------------------
-# Snapshot rápido (add + commit automático)
+# Quick Snapshot (auto add + commit)
 # ------------------------------------------
 function gsnap {
     param([string]$Message = "")
 
-    # Verifica se estamos dentro de um repositório Git
+    # Check if we are inside a Git repository
     git rev-parse --is-inside-work-tree 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Erro: Esta pasta não é um repositório Git." -ForegroundColor Red
+        Write-Host "Error: This folder is not a Git repository." -ForegroundColor Red
         return
     }
 
     $status = git status --porcelain
     if (-not $status) {
-        Write-Host "Nenhuma alteração para guardar (working tree clean)." -ForegroundColor Yellow
+        Write-Host "Nothing to snapshot (working tree clean)." -ForegroundColor Yellow
         return
     }
 
@@ -40,11 +40,11 @@ function gsnap {
 
     git add .
     git commit -m $Message
-    Write-Host "Snapshot criado ✔ → $Message" -ForegroundColor Green
+    Write-Host "Snapshot created ✔ → $Message" -ForegroundColor Green
 }
 
 # ------------------------------------------
-# Git Helpers – Miguel
+# Git Helpers
 # ------------------------------------------
 
 function gs   { git status }
@@ -60,12 +60,12 @@ function gcm {
         [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]
         [string[]]$Message
     )
-    # Permite escrever gcm Mensagem sem aspas obrigatórias caso seja uma frase simples
+    # Allows writing gcm Message without mandatory quotes for simple sentences
     $fullMsg = $Message -join " "
     git commit -m $fullMsg
 }
 
-# Vista de log mais legível e com gráfico de branches
+# Readable log view with branch graph
 function glg  { git log --graph --oneline --decorate }
 
 function gpsh { git push }
@@ -82,39 +82,39 @@ function gcb {
 }
 
 # ------------------------------------------
-# Extras Úteis para o Dia a Dia
+# Useful Day-to-Day Extras
 # ------------------------------------------
 
-# Recarregar o perfil rapidamente após edições
+# Quickly reload the profile after edits
 function Reload-Profile {
     . $PROFILE
-    Write-Host "Perfil recarregado!" -ForegroundColor Green
+    Write-Host "Profile reloaded!" -ForegroundColor Green
 }
 Set-Alias -Name reload -Value Reload-Profile
 
-# Criar pasta e entrar nela imediatamente
+# Create a folder and immediately enter it
 function mkcd {
     param([Parameter(Mandatory = $true)][string]$Path)
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
     Set-Location -Path $Path
 }
 
-# Update ao Powershell
+# Update PowerShell itself via WinGet
 function Update-PS {
-    Write-Host "A verificar atualizações via WinGet..." -ForegroundColor Cyan
+    Write-Host "Checking for updates via WinGet..." -ForegroundColor Cyan
     winget source update | Out-Null
     winget upgrade --id Microsoft.PowerShell
 }
 
 function SYSUPDATE {
     param(
-        [switch]$SkipWinget,   # Salta winget (fontes + pacotes)
-        [switch]$SkipModules,  # Salta módulos PowerShell
-        [switch]$SkipNpm,      # Salta npm global packages
-        [switch]$SkipVSCode,      # Salta extensões do VS Code
-        [switch]$SkipClaudeCode,  # Salta Claude Code CLI
-        [switch]$SkipDefender,    # Salta Windows Defender signatures
-        [switch]$SkipCleanup      # Salta limpeza de ficheiros temporários
+        [switch]$SkipWinget,      # Skip winget (source sync + package upgrades)
+        [switch]$SkipModules,     # Skip PowerShell modules
+        [switch]$SkipNpm,         # Skip npm global packages
+        [switch]$SkipVSCode,      # Skip VS Code extensions
+        [switch]$SkipClaudeCode,  # Skip Claude Code CLI
+        [switch]$SkipDefender,    # Skip Windows Defender signatures
+        [switch]$SkipCleanup      # Skip temporary file cleanup
     )
 
     $start = Get-Date
@@ -140,72 +140,72 @@ function SYSUPDATE {
         Write-Host $Label -ForegroundColor DarkGray
     }
 
-    # 1. Sincronizar fontes winget
+    # 1. Sync winget sources
     if (-not $SkipWinget) {
-        Write-Step "A sincronizar fontes winget..."
+        Write-Step "Syncing winget sources..."
         winget source update
-    } else { Write-Skip "winget – fontes" }
+    } else { Write-Skip "winget – sources" }
 
-    # 2. Atualizar todos os pacotes winget (sem prompts interactivos)
+    # 2. Upgrade all winget packages (no interactive prompts)
     if (-not $SkipWinget) {
-        Write-Step "A atualizar pacotes winget..."
+        Write-Step "Upgrading winget packages..."
         winget upgrade --all --include-unknown `
             --accept-source-agreements `
             --accept-package-agreements
-    } else { Write-Skip "winget – pacotes" }
+    } else { Write-Skip "winget – packages" }
 
-    # 3. Módulos PowerShell
+    # 3. PowerShell modules
     if (-not $SkipModules) {
-        Write-Step "A atualizar módulos PowerShell..."
+        Write-Step "Updating PowerShell modules..."
         Update-Module -AcceptLicense -ErrorAction SilentlyContinue
-    } else { Write-Skip "módulos PowerShell" }
+    } else { Write-Skip "PowerShell modules" }
 
     # 4. npm global packages
     if (-not $SkipNpm -and (Get-Command npm -ErrorAction SilentlyContinue)) {
-        Write-Step "A atualizar npm global packages..."
+        Write-Step "Updating npm global packages..."
         npm update -g --loglevel=error
     } else { Write-Skip "npm global packages" }
 
-    # 5. Extensões do VS Code
+    # 5. VS Code extensions
     if (-not $SkipVSCode -and (Get-Command code -ErrorAction SilentlyContinue)) {
-        Write-Step "A atualizar extensões do VS Code..."
+        Write-Step "Updating VS Code extensions..."
         code --update-extensions 2>$null
-    } else { Write-Skip "extensões VS Code" }
+    } else { Write-Skip "VS Code extensions" }
 
     # 6. Claude Code CLI
     if (-not $SkipClaudeCode -and (Get-Command npm -ErrorAction SilentlyContinue)) {
-        Write-Step "A atualizar Claude Code CLI..."
+        Write-Step "Updating Claude Code CLI..."
         npm install -g @anthropic-ai/claude-code --loglevel=error
     } else { Write-Skip "Claude Code CLI" }
 
     # 7. Windows Defender signatures
     if (-not $SkipDefender) {
-        Write-Step "A atualizar Windows Defender signatures..."
+        Write-Step "Updating Windows Defender signatures..."
         Update-MpSignature -ErrorAction SilentlyContinue
     } else { Write-Skip "Windows Defender signatures" }
 
-    # 8. Limpeza de ficheiros temporários
+    # 8. Temporary file cleanup
     if (-not $SkipCleanup) {
-        Write-Step "A limpar ficheiros temporários..."
+        Write-Step "Cleaning up temporary files..."
         $before = (Get-ChildItem $env:TEMP -Recurse -ErrorAction SilentlyContinue |
                    Measure-Object -Property Length -Sum).Sum
         Remove-Item "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
         $freed = [math]::Round(($before / 1MB), 1)
-        Write-Host "   Libertados ~$freed MB" -ForegroundColor DarkGray
-    } else { Write-Skip "limpeza de temporários" }
+        Write-Host "   Freed ~$freed MB" -ForegroundColor DarkGray
+    } else { Write-Skip "temporary file cleanup" }
 
     $elapsed = (Get-Date) - $start
     Write-Host ""
-    Write-Host "✔  Concluído em $([math]::Round($elapsed.TotalSeconds))s" -ForegroundColor Green
+    Write-Host "✔  Done in $([math]::Round($elapsed.TotalSeconds))s" -ForegroundColor Green
 
-    # Aviso se o PowerShell foi actualizado e precisa de reinício
+    # Warn if PowerShell was updated and needs a restart
     $installedPS = (winget list --id Microsoft.PowerShell 2>$null |
                     Select-String '\d+\.\d+\.\d+' | ForEach-Object {
                         $_.Matches[0].Value }) | Select-Object -Last 1
     if ($installedPS -and $installedPS -ne $PSVersionTable.PSVersion.ToString()) {
         Write-Host ""
-        Write-Host "  ⚠  PowerShell actualizado: $($PSVersionTable.PSVersion) → $installedPS" -ForegroundColor DarkYellow
-        Write-Host "     Reinicia o terminal para aplicar." -ForegroundColor DarkYellow
+        Write-Host "  ⚠  PowerShell updated: $($PSVersionTable.PSVersion) → $installedPS" -ForegroundColor DarkYellow
+        Write-Host "     Restart your terminal to apply." -ForegroundColor DarkYellow
     }
 
     Write-Host "══════════════════════════════════════`n" -ForegroundColor DarkCyan
