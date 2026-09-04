@@ -1,8 +1,10 @@
-# ------------------------------------------
-# Miguel – Git Shortcuts & Snapshot Utility
-# ------------------------------------------
+# ==============================================
+# Miguel's PowerShell Profile
+# ==============================================
 
+# ------------------------------------------
 # Path to Notepad++
+# ------------------------------------------
 $global:NPP_PATH = "C:\Program Files\Notepad++\notepad++.exe"
 
 # Supports multiple files and arguments (e.g. npp file1.txt file2.txt)
@@ -47,8 +49,9 @@ function gsnap {
 # Git Helpers
 # ------------------------------------------
 
-function gs   { git status }
-function gaa  { git add . }
+function gs    { git status }
+function ga    { git add . }
+function gaa   { git add . }
 
 function gadd {
     param([string]$Path = ".")
@@ -65,11 +68,26 @@ function gcm {
     git commit -m $fullMsg
 }
 
-# Readable log view with branch graph
-function glg  { git log --graph --oneline --decorate }
+function gcom {
+    git add .
+    git commit -m ($args -join ' ')
+}
 
-function gpsh { git push }
-function gpll { git pull }
+function lazyg {
+    git add .
+    git commit -m ($args -join ' ')
+    git push
+}
+
+function gcl   { git clone @args }
+
+# Readable log view with branch graph
+function glg   { git log --graph --oneline --decorate }
+
+function gpsh  { git push }
+function gpush { git push @args }
+function gpll  { git pull }
+function gpull { git pull @args }
 
 function gco {
     param([string]$Branch)
@@ -82,7 +100,206 @@ function gcb {
 }
 
 # ------------------------------------------
-# Useful Day-to-Day Extras
+# Navigation Shortcuts
+# ------------------------------------------
+
+function docs  { Set-Location -Path ([Environment]::GetFolderPath('MyDocuments')) }
+function dtop  { Set-Location -Path ([Environment]::GetFolderPath('Desktop')) }
+
+function la    { Get-ChildItem | Format-Table -AutoSize }
+function ll    { Get-ChildItem -Force | Format-Table -AutoSize }
+
+# Create a folder and immediately enter it
+function mkcd {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    Set-Location -Path $Path
+}
+
+# ------------------------------------------
+# Unix-style Utilities
+# ------------------------------------------
+
+# Create a file or update its timestamp
+function touch {
+    param([Parameter(Mandatory)][string]$File)
+    if (Test-Path -Path $File) {
+        (Get-Item -Path $File).LastWriteTime = Get-Date
+    } else {
+        New-Item -Path $File -ItemType File -Force | Out-Null
+    }
+}
+
+# Create a new empty file
+function nf {
+    param([Parameter(Mandatory)][string]$Name)
+    New-Item -ItemType File -Path . -Name $Name -Force | Out-Null
+}
+
+# Recursively find files matching a name pattern
+function ff {
+    param([Parameter(Mandatory)][string]$Name)
+    Get-ChildItem -Recurse -Filter "*$Name*" -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty FullName
+}
+
+# Search files or piped input with regex
+function grep {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)][string]$Pattern,
+        [Parameter(Position = 1)][string]$Path,
+        [Parameter(ValueFromPipeline)][object]$InputObject
+    )
+
+    begin { $pipelineInput = [System.Collections.Generic.List[object]]::new() }
+    process {
+        if ($PSBoundParameters.ContainsKey('InputObject')) { $pipelineInput.Add($InputObject) }
+    }
+    end {
+        if ($Path) {
+            Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue |
+                Select-String -Pattern $Pattern
+        } elseif ($pipelineInput.Count -gt 0) {
+            $pipelineInput | Select-String -Pattern $Pattern
+        } else {
+            Write-Error 'Usage: grep <pattern> [path] or pipe input to grep'
+        }
+    }
+}
+
+# Show first N lines of a file (default 10)
+function head {
+    param([Parameter(Mandatory)][string]$Path, [int]$n = 10)
+    Get-Content -Path $Path -Head $n
+}
+
+# Show last N lines of a file; -f to follow
+function tail {
+    param([Parameter(Mandatory)][string]$Path, [int]$n = 10, [switch]$f)
+    Get-Content -Path $Path -Tail $n -Wait:$f
+}
+
+# Find and replace text inside a file
+function sed {
+    param(
+        [Parameter(Mandatory)][string]$File,
+        [Parameter(Mandatory)][string]$Find,
+        [Parameter(Mandatory)][string]$Replace
+    )
+    (Get-Content -Path $File).Replace($Find, $Replace) | Set-Content -Path $File
+}
+
+# Show full path of a command
+function which {
+    param([Parameter(Mandatory)][string]$Name)
+    Get-Command -Name $Name | Select-Object -ExpandProperty Definition
+}
+
+# Show disk/volume info
+function df { Get-Volume }
+
+# Extract a ZIP archive to the current directory
+function unzip {
+    param([Parameter(Mandatory)][string]$File)
+    if (-not (Test-Path -Path $File -PathType Leaf)) {
+        Write-Error "File not found: $File"
+        return
+    }
+    Expand-Archive -Path $File -DestinationPath (Get-Location) -Force
+}
+
+# Send a file or folder to the Recycle Bin (instead of permanent delete)
+function trash {
+    param([Parameter(Mandatory)][string]$Path)
+    $resolvedPath = Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue
+    if (-not $resolvedPath) { Write-Error "Item not found: $Path"; return }
+
+    $fullPath = $resolvedPath.ProviderPath
+    $item = Get-Item -LiteralPath $fullPath
+    $parentPath = if ($item.PSIsContainer) {
+        if ($item.Parent) { $item.Parent.FullName } else { Split-Path -Path $item.FullName -Parent }
+    } else { $item.DirectoryName }
+
+    $shell = New-Object -ComObject 'Shell.Application'
+    $shellFolder = $shell.NameSpace($parentPath)
+    $shellItem = if ($shellFolder) { $shellFolder.ParseName($item.Name) } else { $null }
+
+    if ($shellItem) { $shellItem.InvokeVerb('delete') }
+    else { Write-Error "Could not move item to Recycle Bin: $fullPath" }
+}
+
+# ------------------------------------------
+# System Utilities
+# ------------------------------------------
+
+# Show how long the system has been running
+function uptime {
+    $boot = if (Get-Command Get-Uptime -ErrorAction SilentlyContinue) {
+        Get-Uptime -Since
+    } else {
+        (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime
+    }
+    (Get-Date) - $boot | Select-Object Days, Hours, Minutes, Seconds
+}
+
+# Flush the DNS resolver cache
+function flushdns {
+    Clear-DnsClientCache
+    Write-Host "DNS has been flushed." -ForegroundColor Green
+}
+
+# Show your public IP address
+function pubip {
+    (Invoke-RestMethod -Uri 'https://ifconfig.me/ip').Trim()
+}
+
+# Show detailed system information
+function sysinfo { Get-ComputerInfo }
+
+# Open a new PowerShell window as Administrator
+function admin {
+    $cwd = (Get-Location).ProviderPath
+    $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh.exe' } else { 'powershell.exe' }
+    $shellArgs = if ($args.Count -gt 0) { @('-NoExit', '-Command', ($args -join ' ')) } else { @('-NoExit') }
+    if (Get-Command wt -ErrorAction SilentlyContinue) {
+        Start-Process wt -Verb RunAs -ArgumentList (@('-d', $cwd, $shell) + $shellArgs)
+    } else {
+        Start-Process $shell -Verb RunAs -WorkingDirectory $cwd -ArgumentList $shellArgs
+    }
+}
+Set-Alias -Name su -Value admin -Force
+
+# Kill a process by name
+function pkill {
+    param([Parameter(Mandatory)][string]$Name)
+    Get-Process -Name $Name -ErrorAction SilentlyContinue | Stop-Process -Force
+}
+Set-Alias -Name k9 -Value pkill -Force
+
+# Find a running process by name
+function pgrep {
+    param([Parameter(Mandatory)][string]$Name)
+    Get-Process -Name $Name -ErrorAction SilentlyContinue
+}
+
+# Copy text to clipboard
+function cpy { Set-Clipboard ($args -join ' ') }
+
+# Paste text from clipboard
+function pst { Get-Clipboard }
+
+# Set an environment variable for the current session
+function export {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Value
+    )
+    Set-Item -Path "env:$Name" -Value $Value -Force
+}
+
+# ------------------------------------------
+# Profile Helpers
 # ------------------------------------------
 
 # Quickly reload the profile after edits
@@ -92,13 +309,6 @@ function Reload-Profile {
 }
 Set-Alias -Name reload -Value Reload-Profile
 
-# Create a folder and immediately enter it
-function mkcd {
-    param([Parameter(Mandatory = $true)][string]$Path)
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    Set-Location -Path $Path
-}
-
 # Update PowerShell itself via WinGet
 function Update-PS {
     Write-Host "Checking for updates via WinGet..." -ForegroundColor Cyan
@@ -106,6 +316,88 @@ function Update-PS {
     winget upgrade --id Microsoft.PowerShell
 }
 
+# ------------------------------------------
+# PSReadLine — smarter history & key bindings
+# ------------------------------------------
+function Initialize-PSReadLine {
+    if (-not (Get-Module -ListAvailable -Name PSReadLine)) { return }
+
+    $options = @{
+        EditMode                      = 'Windows'
+        HistoryNoDuplicates           = $true
+        HistorySearchCursorMovesToEnd = $true
+        BellStyle                     = 'None'
+        MaximumHistoryCount           = 10000
+        Colors                        = @{
+            Command   = '#87CEEB'
+            Parameter = '#98FB98'
+            Operator  = '#FFB6C1'
+            Variable  = '#DDA0DD'
+            String    = '#FFDAB9'
+            Number    = '#B0E0E6'
+            Type      = '#F0E68C'
+            Comment   = '#D3D3D3'
+            Keyword   = '#8367c7'
+            Error     = '#FF6347'
+        }
+    }
+
+    Set-PSReadLineOption @options -ErrorAction SilentlyContinue
+
+    # Inline predictions only available in PS 7+ with VT support; silently skip if unavailable
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        try {
+            Set-PSReadLineOption -PredictionSource HistoryAndPlugin -PredictionViewStyle ListView -ErrorAction Stop
+        } catch { }
+    }
+
+    # Up/Down arrow searches history by prefix
+    Set-PSReadLineKeyHandler -Key UpArrow   -Function HistorySearchBackward
+    Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward
+    Set-PSReadLineKeyHandler -Key Tab       -Function MenuComplete
+
+    # Familiar shortcuts
+    Set-PSReadLineKeyHandler -Chord 'Ctrl+d'          -Function DeleteChar
+    Set-PSReadLineKeyHandler -Chord 'Ctrl+w'          -Function BackwardDeleteWord
+    Set-PSReadLineKeyHandler -Chord 'Alt+d'           -Function DeleteWord
+    Set-PSReadLineKeyHandler -Chord 'Ctrl+LeftArrow'  -Function BackwardWord
+    Set-PSReadLineKeyHandler -Chord 'Ctrl+RightArrow' -Function ForwardWord
+    Set-PSReadLineKeyHandler -Chord 'Ctrl+z'          -Function Undo
+    Set-PSReadLineKeyHandler -Chord 'Ctrl+y'          -Function Redo
+
+    # Never save passwords/secrets in history
+    Set-PSReadLineOption -AddToHistoryHandler {
+        param([string]$line)
+        $line -notmatch '(?i)(password|secret|token|apikey|connectionstring)'
+    }
+}
+
+Initialize-PSReadLine
+
+# ------------------------------------------
+# Terminal-Icons (file/folder icons in ls)
+# ------------------------------------------
+if (Get-Module -ListAvailable -Name Terminal-Icons) {
+    Import-Module -Name Terminal-Icons -ErrorAction SilentlyContinue
+}
+
+# ------------------------------------------
+# oh-my-posh prompt
+# ------------------------------------------
+if (Get-Command oh-my-posh -ErrorAction SilentlyContinue) {
+    oh-my-posh init pwsh --config "$env:POSH_THEMES_PATH\jandedobbeleer.omp.json" | Invoke-Expression
+}
+
+# ------------------------------------------
+# zoxide (smarter cd — learns your habits)
+# ------------------------------------------
+if (Get-Command zoxide -ErrorAction SilentlyContinue) {
+    Invoke-Expression (& { (zoxide init --cmd z powershell | Out-String) })
+}
+
+# ------------------------------------------
+# SYSUPDATE — Full system updater
+# ------------------------------------------
 function SYSUPDATE {
     param(
         [switch]$SkipWinget,      # Skip winget (source sync + package upgrades)
@@ -127,11 +419,6 @@ function SYSUPDATE {
         Write-Host "`n[$script:step/$total] $Label" -ForegroundColor Yellow
     }
 
-    Write-Host ""
-    Write-Host "══════════════════════════════════════" -ForegroundColor DarkCyan
-    Write-Host "  🔄  SYSUPDATE  –  $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -ForegroundColor Cyan
-    Write-Host "══════════════════════════════════════" -ForegroundColor DarkCyan
-
     function Write-Skip {
         param([string]$Label)
         $script:step++
@@ -139,6 +426,11 @@ function SYSUPDATE {
         Write-Host "[skip] " -NoNewline -ForegroundColor DarkYellow
         Write-Host $Label -ForegroundColor DarkGray
     }
+
+    Write-Host ""
+    Write-Host "══════════════════════════════════════" -ForegroundColor DarkCyan
+    Write-Host "  🔄  SYSUPDATE  –  $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -ForegroundColor Cyan
+    Write-Host "══════════════════════════════════════" -ForegroundColor DarkCyan
 
     # 1. Sync winget sources
     if (-not $SkipWinget) {
