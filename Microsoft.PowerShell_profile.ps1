@@ -374,18 +374,17 @@ function Initialize-PSReadLine {
 
 Initialize-PSReadLine
 
-# ------------------------------------------
-# Terminal-Icons (file/folder icons in ls)
-# ------------------------------------------
-if (Get-Module -ListAvailable -Name Terminal-Icons) {
-    Import-Module -Name Terminal-Icons -ErrorAction SilentlyContinue
-}
 
 # ------------------------------------------
 # oh-my-posh prompt
 # ------------------------------------------
 if (Get-Command oh-my-posh -ErrorAction SilentlyContinue) {
-    oh-my-posh init pwsh --config "$env:POSH_THEMES_PATH\jandedobbeleer.omp.json" | Invoke-Expression
+    $poshTheme = "$HOME\Documents\PowerShell\oh-my-posh\themes\jandedobbeleer.omp.json"
+    if (Test-Path $poshTheme) {
+        oh-my-posh init pwsh --config $poshTheme | Invoke-Expression
+    } else {
+        Write-Warning "oh-my-posh: tema não encontrado em $poshTheme"
+    }
 }
 
 # ------------------------------------------
