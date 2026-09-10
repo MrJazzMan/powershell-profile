@@ -99,6 +99,11 @@ function gco {
     git checkout $Branch
 }
 
+# `gcb` ships as a built-in alias for Get-Clipboard, and PowerShell resolves
+# aliases before functions — so without dropping it first, the function below
+# is never reached. Get-Clipboard is still available as `pst` (and by name).
+Remove-Item Alias:gcb -Force -ErrorAction SilentlyContinue
+
 function gcb {
     param([string]$Branch)
     git checkout -b $Branch
@@ -113,6 +118,36 @@ function dtop  { Set-Location -Path ([Environment]::GetFolderPath('Desktop')) }
 
 function la    { Get-ChildItem | Format-Table -AutoSize }
 function ll    { Get-ChildItem -Force | Format-Table -AutoSize }
+
+# ------------------------------------------
+# dir — accept cmd.exe switches
+# ------------------------------------------
+# `dir` is normally just an alias for Get-ChildItem, which has no /s or /p:
+# they bind to -Path instead, so "/s" resolves to C:\s and errors out.
+#
+# The alias has to go first: PowerShell resolves aliases *before* functions,
+# so a `function dir` alongside the alias would simply never be reached.
+#
+# This wrapper keeps Get-ChildItem (and its object output) for everything
+# that already worked, and shells out to the real cmd.exe dir only when an
+# actual cmd switch is present. `ls`, `gci` and `Get-ChildItem` still reach
+# the cmdlet directly if you want to bypass this.
+#
+# Caveat: on the cmd.exe path the output is plain text, not FileInfo
+# objects — so `dir /s | Where-Object Length -gt 1MB` will not work.
+# Use `dir -Recurse | Where-Object ...` for that.
+Remove-Item Alias:dir -Force -ErrorAction SilentlyContinue
+
+function dir {
+    # cmd.exe dir switches, with optional modifier: /s /b /a:d /o:-d /-c /?
+    $cmdSwitch = '^/(\?|-?[abcdlnopqrstwx4](:.+)?)$'
+
+    if (@($args | Where-Object { $_ -is [string] -and $_ -match $cmdSwitch }).Count) {
+        & cmd.exe /c dir @args
+    } else {
+        Get-ChildItem @args
+    }
+}
 
 # Create a folder and immediately enter it
 function mkcd {
