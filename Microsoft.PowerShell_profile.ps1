@@ -50,20 +50,25 @@ function gsnap {
 # ------------------------------------------
 
 function gs    { git status }
+
+# ga  = stage from the current directory down
+# gaa = stage the whole worktree, wherever you are inside the repo
 function ga    { git add . }
-function gaa   { git add . }
+function gaa   { git add --all }
 
 function gadd {
     param([string]$Path = ".")
     git add $Path
 }
 
-function gcm {
+# NOTE: named gcmsg, not gcm — `gcm` is PowerShell's built-in alias for
+# Get-Command, and defining a function with that name would shadow it.
+function gcmsg {
     param(
         [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]
         [string[]]$Message
     )
-    # Allows writing gcm Message without mandatory quotes for simple sentences
+    # Allows writing gcmsg Message without mandatory quotes for simple sentences
     $fullMsg = $Message -join " "
     git commit -m $fullMsg
 }
@@ -411,14 +416,22 @@ function SYSUPDATE {
     Write-Host ""
     Write-Host "✔  Done in $([math]::Round($elapsed.TotalSeconds))s" -ForegroundColor Green
 
-    # Warn if PowerShell was updated and needs a restart
+    # Warn if a newer PowerShell is on disk than the one running this session.
+    # Compare as [version], not as strings: a string compare also fires on
+    # downgrades and orders "7.6.10" before "7.6.9".
     $installedPS = (winget list --id Microsoft.PowerShell 2>$null |
                     Select-String '\d+\.\d+\.\d+' | ForEach-Object {
                         $_.Matches[0].Value }) | Select-Object -Last 1
-    if ($installedPS -and $installedPS -ne $PSVersionTable.PSVersion.ToString()) {
-        Write-Host ""
-        Write-Host "  ⚠  PowerShell updated: $($PSVersionTable.PSVersion) → $installedPS" -ForegroundColor DarkYellow
-        Write-Host "     Restart your terminal to apply." -ForegroundColor DarkYellow
+    if ($installedPS) {
+        $running = $PSVersionTable.PSVersion
+        $runningShort = "$($running.Major).$($running.Minor).$($running.Patch)"
+        try {
+            if ([version]$installedPS -gt [version]$runningShort) {
+                Write-Host ""
+                Write-Host "  ⚠  PowerShell updated: $runningShort → $installedPS" -ForegroundColor DarkYellow
+                Write-Host "     Restart your terminal to apply." -ForegroundColor DarkYellow
+            }
+        } catch { }
     }
 
     Write-Host "══════════════════════════════════════`n" -ForegroundColor DarkCyan
