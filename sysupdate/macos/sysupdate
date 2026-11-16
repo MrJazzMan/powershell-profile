@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# ------------------------------------------
+# SYSUPDATE (macOS) - Full system updater
+# ------------------------------------------
+# Same idea as the Windows version: one command, every package manager,
+# independent steps in parallel, a timing and error summary at the end.
+# Written for the bash 3.2 that ships with macOS (no associative arrays,
+# no `wait -n`), so it also runs unchanged under a newer Homebrew bash.
+#
+# Usage: sysupdate [--skip-brew] [--skip-mas] [--skip-npm] [--skip-go]
+#                  [--skip-vscode] [--skip-pip] [--skip-macos] [--skip-bun]
+#                  [--skip-claude] [--skip-cleanup]
+
+set -u
+
+SKIP_BREW=0; SKIP_MAS=0; SKIP_NPM=0; SKIP_GO=0; SKIP_VSCODE=0; SKIP_PIP=0
+SKIP_MACOS=0; SKIP_BUN=0; SKIP_CLAUDE=0; SKIP_CLEANUP=0
+for arg in "$@"; do
+    case "$arg" in
+        --skip-brew)    SKIP_BREW=1 ;;
+        --skip-mas)     SKIP_MAS=1 ;;
+        --skip-npm)     SKIP_NPM=1 ;;
+        --skip-go)      SKIP_GO=1 ;;
+        --skip-vscode)  SKIP_VSCODE=1 ;;
+        --skip-pip)     SKIP_PIP=1 ;;
+        --skip-macos)   SKIP_MACOS=1 ;;
+        --skip-bun)     SKIP_BUN=1 ;;
+        --skip-claude)  SKIP_CLAUDE=1 ;;
+        --skip-cleanup) SKIP_CLEANUP=1 ;;
+        -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "Unknown option: $arg (see --help)" >&2; exit 2 ;;
+    esac
+done
+
+# ---------- output helpers ----------
+C_Y=$'\033[33m'; C_GRAY=$'\033[90m'; C_R=$'\033[31m'; C_C=$'\033[36m'
+C_G=$'\033[32m'; C_DY=$'\033[2;33m'; C_0=$'\033[0m'
+
+has() { command -v "$1" >/dev/null 2>&1; }
+info() { printf '%s   %s%s\n' "$C_GRAY" "$*" "$C_0"; }
+warn() { printf '%s   ⚠ %s%s\n' "$C_DY" "$*" "$C_0"; }
+err()  { printf '%s   ✘ %s%s\n' "$C_R" "$*" "$C_0"; }
+
+TOTAL=11
+STEP=0
+CUR=""; CUR_T0=0; CUR_FAILED=0
+RESULTS=()   # "seconds|step name|failed(0/1)"
+
+complete_step() {
+    [ -n "$CUR" ] || return 0
+    local secs=$((SECONDS - CUR_T0))
+    RESULTS+=("$secs|$CUR|$CUR_FAILED")
+    info "⏱ ${secs}s"
+    CUR=""
+}
+step() {
+    complete_step
+    STEP=$((STEP + 1)); CUR="$1"; CUR_T0=$SECONDS; CUR_FAILED=0
+    printf '\n%s[%d/%d] %s%s\n' "$C_Y" "$STEP" "$TOTAL" "$1" "$C_0"
+}
+skip() {
+    complete_step
+    STEP=$((STEP + 1))
+    printf '\n%s[%d/%d] %s[skip] %s%s%s\n' "$C_GRAY" "$STEP" "$TOTAL" "$C_DY" "$C_GRAY" "$1" "$C_0"
+}
+# Marks the current step as failed when the last command returned non-zero.
+check() { local rc=$?; [ $rc -eq 0 ] || { CUR_FAILED=1; err "$1 failed (exit code $rc)"; }; return 0; }
+
+# Resolves symlinks (Homebrew and npm both install `claude`/`bun` as links).
+resolve() { local p="$1"; readlink -f "$p" 2>/dev/null || printf '%s\n' "$p"; }
+
+START=$SECONDS
+echo
+printf '%s══════════════════════════════════════%s\n' "$C_C" "$C_0"
+printf '%s  🔄  SYSUPDATE (macOS)  -  %s%s\n' "$C_C" "$(date '+%Y-%m-%d %H:%M')" "$C_0"
+printf '%s══════════════════════════════════════%s\n' "$C_C" "$C_0"
+
+# 1. Homebrew metadata
+if [ $SKIP_BREW -eq 0 ] && has brew; then
+    step "Updating Homebrew..."
+    brew update --quiet
+    check "brew update"
+else skip "Homebrew - update"; fi
+
+# 2. Homebrew formulae and casks
+# --greedy also upgrades casks that update themselves (Chrome, VS Code, ...),
+# which Homebrew otherwise leaves alone and then reports as outdated forever.
+if [ $SKIP_BREW -eq 0 ] && has brew; then
+    step "Upgrading Homebrew formulae and casks..."
+    brew upgrade
+    check "brew upgrade (formulae)"
+    brew upgrade --cask --greedy
+    check "brew upgrade (casks)"
+    if [ $CUR_FAILED -eq 1 ]; then
+        printf '%s   ↳ Most often an app that is still open. Close it and re-run: brew upgrade --cask --greedy%s\n' "$C_DY" "$C_0"
+    fi
+else skip "Homebrew - packages"; fi
+
+# 3-8. Independent steps, run in parallel
+# Each body runs in a background subshell with its output captured to a file,
+# then everything is printed in step order once all of them are done.
+# A body signals failure with a non-zero return; a warning-only outcome
+# (nothing broken, but something to act on) returns 3.
+body_mas() { mas upgrade; }
+
+body_npm() { npm update -g --loglevel=error; }
+
+body_go() {
+    # Binaries installed with `go install pkg@latest` have no manifest: read the
+    # package path and module version back from each binary, and only rebuild
+    # when `go list -m mod@latest` reports a newer version.
+    local gobin rc=0 tool info pkg mod have latest
+    gobin="${GOBIN:-$(go env GOPATH)/bin}"
+    [ -d "$gobin" ] || { info "(no Go tools installed)"; return 0; }
+    local found=0
+    for tool in "$gobin"/*; do
+        [ -f "$tool" ] && [ -x "$tool" ] || continue
+        found=1
+        info=$(go version -m "$tool" 2>/dev/null)
+        pkg=$(printf '%s\n' "$info" | awk '$1=="path"{print $2; exit}')
+        mod=$(printf '%s\n' "$info" | awk '$1=="mod"{print $2; exit}')
+        have=$(printf '%s\n' "$info" | awk '$1=="mod"{print $3; exit}')
+        if [ -z "$pkg" ]; then info "? $(basename "$tool") - no module path, skipped"; continue; fi
+        latest=""
+        [ -n "$mod" ] && latest=$(go list -m "$mod@latest" 2>/dev/null | awk '{print $NF}')
+        if [ -n "$latest" ] && [ "$latest" = "$have" ]; then
+            info "✔ $(basename "$tool") up to date ($have)"; continue
+        fi
+        if go install "$pkg@latest" >/dev/null 2>&1; then
+            info "✔ $(basename "$tool") $have → ${latest:-latest}"
+        else
+            err "$(basename "$tool") - go install failed"; rc=1
+        fi
+    done
+    [ $found -eq 1 ] || info "(no Go tools installed)"
+    return $rc
+}
+
+body_vscode() {
+    # Re-installing an extension without --force only downloads it when the
+    # marketplace has a newer version, so this is cheap for up-to-date ones.
+    local n=0 ext
+    while IFS= read -r ext; do
+        [ -n "$ext" ] || continue
+        code --install-extension "$ext" >/dev/null 2>&1
+        n=$((n + 1))
+    done <<EOF
+$(code --list-extensions 2>/dev/null)
+EOF
+    info "✔ $n extension(s) checked"
+}
+
+body_pip() {
+    # User-level packages of the system python3 only. --break-system-packages is
+    # deliberate and scoped to this command (PEP 668), as in mac-update.
+    local outdated
+    outdated=$(python3 -m pip list --outdated --user 2>/dev/null | awk 'NR>2 {print $1}')
+    if [ -z "$outdated" ]; then info "✔ All user packages up to date"; return 0; fi
+    # shellcheck disable=SC2086
+    python3 -m pip install --upgrade --user --break-system-packages --quiet $outdated || return 1
+    info "✔ Updated: $(printf '%s' "$outdated" | tr '\n' ' ')"
+}
+
+body_macos() {
+    # Only reports: installing macOS updates can force a restart, so that stays
+    # a deliberate action (System Settings, or `sudo softwareupdate -ia -R`).
+    local out
+    out=$(softwareupdate --list 2>&1)
+    if printf '%s' "$out" | grep -q 'No new software available'; then
+        info "✔ macOS is up to date"; return 0
+    fi
+    local labels
+    labels=$(printf '%s\n' "$out" | sed -n 's/^\* Label: //p')
+    if [ -n "$labels" ]; then
+        printf '%s\n' "$labels" | while IFS= read -r l; do warn "Available: $l"; done
+        printf '%s   ↳ Install from System Settings > General > Software Update%s\n' "$C_DY" "$C_0"
+        return 3
+    fi
+    printf '%s\n' "$out" | tail -3 | while IFS= read -r l; do info "$l"; done
+}
+
+# name|label|enabled|body
+PAR_STEPS=(
+    "Mac App Store apps|Updating Mac App Store apps...|$([ $SKIP_MAS -eq 0 ] && has mas && echo 1 || echo 0)|body_mas"
+    "npm global packages|Updating npm global packages...|$([ $SKIP_NPM -eq 0 ] && has npm && echo 1 || echo 0)|body_npm"
+    "Go tools|Updating Go tools...|$([ $SKIP_GO -eq 0 ] && has go && echo 1 || echo 0)|body_go"
+    "VS Code extensions|Updating VS Code extensions...|$([ $SKIP_VSCODE -eq 0 ] && has code && echo 1 || echo 0)|body_vscode"
+    "Python user packages|Updating Python user packages (pip)...|$([ $SKIP_PIP -eq 0 ] && has python3 && python3 -m pip --version >/dev/null 2>&1 && echo 1 || echo 0)|body_pip"
+    "macOS updates|Checking macOS updates...|$([ $SKIP_MACOS -eq 0 ] && has softwareupdate && echo 1 || echo 0)|body_macos"
+)
+
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/sysupdate.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT
+
+complete_step
+PIDS=(); n_on=0
+for i in "${!PAR_STEPS[@]}"; do
+    IFS='|' read -r name label on body <<<"${PAR_STEPS[$i]}"
+    [ "$on" = 1 ] || continue
+    n_on=$((n_on + 1))
+    ( t0=$SECONDS; "$body"; rc=$?; echo "$rc $((SECONDS - t0))" >"$TMP/$i.rc" ) >"$TMP/$i.out" 2>&1 </dev/null &
+    PIDS+=($!)
+done
+if [ $n_on -gt 0 ]; then
+    printf '\n%s⚡ Running %d independent step(s) in parallel...%s\n' "$C_C" "$n_on" "$C_0"
+    for pid in "${PIDS[@]}"; do wait "$pid"; done
+fi
+
+for i in "${!PAR_STEPS[@]}"; do
+    IFS='|' read -r name label on body <<<"${PAR_STEPS[$i]}"
+    if [ "$on" != 1 ]; then skip "$name"; continue; fi
+    STEP=$((STEP + 1))
+    printf '\n%s[%d/%d] %s%s\n' "$C_Y" "$STEP" "$TOTAL" "$label" "$C_0"
+    cat "$TMP/$i.out"
+    read -r rc secs <"$TMP/$i.rc" 2>/dev/null || { rc=1; secs=0; }
+    failed=0
+    if [ "$rc" != 0 ] && [ "$rc" != 3 ]; then failed=1; err "$name failed (exit code $rc)"; fi
+    RESULTS+=("$secs|$name|$failed")
+    info "⏱ ${secs}s"
+done
+
+# 9. Bun (only the official installer in ~/.bun self-upgrades; a Homebrew
+# Bun is already covered by step 2).
+if [ $SKIP_BUN -eq 0 ] && has bun; then
+    case "$(resolve "$(command -v bun)")" in
+        "$HOME"/.bun/*) step "Updating Bun..."; bun upgrade; check "bun upgrade" ;;
+        *) skip "Bun runtime (managed by Homebrew - step 2)" ;;
+    esac
+else skip "Bun runtime"; fi
+
+# 10. Claude Code CLI - work out how it was installed from where the binary lives.
+if [ $SKIP_CLAUDE -eq 0 ] && has claude; then
+    step "Updating Claude Code CLI..."
+    src=$(resolve "$(command -v claude)")
+    case "$src" in
+        */Caskroom/*|*/Cellar/*|/opt/homebrew/*|/usr/local/Homebrew/*)
+            info "✔ Managed by Homebrew (step 2) - $(claude --version 2>/dev/null)" ;;
+        */node_modules/*)
+            latest=$(npm view @anthropic-ai/claude-code version 2>/dev/null)
+            current=$(claude --version 2>/dev/null | awk '{print $1}')
+            if [ -n "$latest" ] && [ "$latest" != "$current" ]; then
+                npm install -g @anthropic-ai/claude-code --loglevel=error
+                check "npm install"
+                info "✔ $current → $latest"
+            else
+                info "✔ Already up to date ($current)"
+            fi ;;
+        *)
+            claude update
+            check "claude update" ;;
+    esac
+else skip "Claude Code CLI"; fi
+
+# 11. Cleanup: old Homebrew downloads and versions.
+if [ $SKIP_CLEANUP -eq 0 ] && has brew; then
+    step "Cleaning up Homebrew..."
+    out=$(brew cleanup 2>&1); rc=$?
+    freed=$(printf '%s\n' "$out" | grep -i 'freed' | tail -1 | sed 's/^==> //')
+    if [ $rc -ne 0 ]; then CUR_FAILED=1; err "brew cleanup failed (exit code $rc)"
+    elif [ -n "$freed" ]; then info "✔ $freed"
+    else info "✔ Nothing to clean"; fi
+else skip "cleanup"; fi
+
+complete_step
+
+# ---------- summary ----------
+echo
+if [ ${#RESULTS[@]} -gt 0 ]; then
+    printf '%sSlowest steps:%s\n' "$C_GRAY" "$C_0"
+    printf '%s\n' "${RESULTS[@]}" | sort -t'|' -k1,1nr | head -3 |
+        while IFS='|' read -r s n f; do printf '%s   %6ss  %s%s\n' "$C_GRAY" "$s" "$n" "$C_0"; done
+    failed_list=$(printf '%s\n' "${RESULTS[@]}" | awk -F'|' '$3==1 {print $2}' | paste -sd ';' - | sed 's/;/; /g')
+    if [ -n "$failed_list" ]; then
+        n_failed=$(printf '%s\n' "${RESULTS[@]}" | awk -F'|' '$3==1' | wc -l | tr -d ' ')
+        printf '%s✘  %s step(s) had errors: %s%s\n' "$C_R" "$n_failed" "$failed_list" "$C_0"
+    fi
+fi
+printf '%s✔  Done in %ss%s\n' "$C_G" "$((SECONDS - START))" "$C_0"
+printf '%s══════════════════════════════════════%s\n\n' "$C_C" "$C_0"
